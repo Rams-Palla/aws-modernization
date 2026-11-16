@@ -189,6 +189,7 @@ function isLocked(engagement: Engagement, phase: string) {
     "discovery",
     "graph",
     "scope",
+    "semantic-ir",
     "requirements",
     "backlog",
     "modernize",

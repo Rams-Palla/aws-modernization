@@ -1,7 +1,8 @@
 import { useState, useEffect, Fragment, type ReactNode } from "react";
-import { api, type Engagement } from "../api";
+import { api, type Engagement, type ScopeAnalysis } from "../api";
 import { GraphView } from "./GraphView";
 import { DiscoveryReport } from "./DiscoveryReport";
+import { SemanticIRPanel } from "./SemanticIRPanel";
 import { Cpu, ShieldCheck, Server, Cloud, Zap } from "./Icons";
 
 
@@ -25,6 +26,8 @@ export function PhasePanels({
       return <Graph e={engagement} />;
     case "scope":
       return <Scope e={engagement} onChange={onChange} />;
+    case "semantic-ir":
+      return <SemanticIRPanel e={engagement} />;
     case "requirements":
       return <Requirements e={engagement} onChange={onChange} />;
 
@@ -81,19 +84,43 @@ function Graph({ e }: { e: Engagement }) {
 
 function Scope({ e, onChange }: { e: Engagement; onChange: (eng: Engagement) => void }) {
   const [busy, setBusy] = useState(false);
-  const [selectedCapId, setSelectedCapId] = useState<string>(
-    e.scope?.capabilityId || e.seed!.capabilities[0]?.id || ""
-  );
-  const selectedCapability = e.seed!.capabilities.find((c) => c.id === selectedCapId);
+  const [scopeAnalysis, setScopeAnalysis] = useState<ScopeAnalysis | null>(null);
+  const [scopeAnalysisError, setScopeAnalysisError] = useState<string | null>(null);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [selectedCapId, setSelectedCapId] = useState<string | null>(null);
+  const candidates = scopeAnalysis?.logicalModules ?? [];
+
+  useEffect(() => {
+    let active = true;
+    setScopeAnalysis(null);
+    setScopeAnalysisError(null);
+    setSelectedCapId(null);
+    api.scopeAnalysis(e.id)
+      .then((analysis) => {
+        if (!active) return;
+        setScopeAnalysis(analysis);
+        const activeScopeId = e.scope?.capabilityId;
+        setSelectedCapId(activeScopeId && analysis.logicalModules.some((module) => module.moduleId === activeScopeId)
+          ? activeScopeId
+          : null);
+      })
+      .catch((err: Error) => {
+        if (active) setScopeAnalysisError(err.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [e.id, e.scope?.capabilityId]);
 
   async function pick(id: string) {
-    setSelectedCapId(id);
     setBusy(true);
+    setSelectionError(null);
     try {
       const updated = await api.scope(e.id, id);
+      setSelectedCapId(id);
       onChange(updated);
     } catch (err) {
-      console.error("Failed to set scope:", err);
+      setSelectionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -101,405 +128,103 @@ function Scope({ e, onChange }: { e: Engagement; onChange: (eng: Engagement) => 
 
   return (
     <div className="space-y-6">
-      {/* Capability Cards Selection */}
-      <div className="grid gap-4 md:grid-cols-2">
-        {e.seed!.capabilities.map((c) => {
-          const selected = selectedCapId === c.id;
-          return (
-            <button
-              key={c.id}
-              type="button"
-              disabled={busy}
-              onClick={() => void pick(c.id)}
-              className={`rounded-xl border-2 p-5 text-left transition cursor-pointer relative ${
-                selected
-                  ? "border-blue-600 bg-blue-50/70 shadow-md ring-2 ring-blue-500/20"
-                  : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/80"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold ${
-                    selected ? "bg-blue-600 text-white" : "border border-slate-300 text-transparent"
-                  }`}>
-                    ✓
-                  </span>
-                  <h3 className={`text-base font-bold ${selected ? "text-blue-900" : "text-slate-900"}`}>{c.name}</h3>
-                </div>
-                <span className={`rounded px-2 py-0.5 text-[10px] uppercase font-semibold ${
-                  c.risk === "high" ? "bg-red-100 border border-red-200 text-red-700" :
-                  c.risk === "medium" ? "bg-amber-100 border border-amber-200 text-amber-800" :
-                  "bg-emerald-100 border border-emerald-200 text-emerald-700"
-                }`}>
-                  {c.risk} risk
-                </span>
-              </div>
-              <p className="mt-2 text-xs text-slate-600 leading-relaxed">{c.summary}</p>
-              <p className="mt-3 font-mono text-[11px] text-slate-500">
-                {c.programs} programs · {c.tables} tables · {c.jobs} jobs · {c.screens} screens
-              </p>
+      <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-4">
+        <h3 className="text-sm font-bold text-blue-950">Select a scope from graph evidence</h3>
+        <p className="mt-1 text-xs leading-relaxed text-blue-900">
+          Scope candidates are shown only when the AST/AKG contains operational relationships such as calls, reads, writes, or event flows. Structural file membership alone is not sufficient evidence.
+        </p>
+        {scopeAnalysisError && (
+          <p role="alert" className="mt-2 text-xs text-red-700">Scope evidence could not be loaded: {scopeAnalysisError}</p>
+        )}
+        {selectionError && (
+          <p role="alert" className="mt-2 text-xs text-red-700">Scope selection failed: {selectionError}</p>
+        )}
+      </section>
 
-              {/* Mathematical Risk Score Breakdown */}
-              {c.riskScore !== undefined && (
-                <div className="mt-3 rounded-lg border border-slate-200/80 bg-slate-50/90 p-2.5 text-[11px]">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="font-semibold text-slate-700">Calculated Risk Index:</span>
-                    <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[10px] ${
-                      c.riskScore >= 70 ? "bg-red-100 text-red-800" :
-                      c.riskScore >= 40 ? "bg-amber-100 text-amber-800" :
-                      "bg-emerald-100 text-emerald-800"
-                    }`}>
-                      {c.riskScore} / 100
-                    </span>
-                  </div>
-                  {c.riskBreakdown && (
-                    <div className="grid grid-cols-3 gap-1 text-[10px] text-slate-600 font-mono">
-                      <div className="bg-white/80 p-1 rounded border border-slate-200 text-center">
-                        <span className="block text-[9px] text-slate-400 uppercase">Blast</span>
-                        <span className="font-bold text-slate-800">+{c.riskBreakdown.blastRadiusPoints}</span>
-                      </div>
-                      <div className="bg-white/80 p-1 rounded border border-slate-200 text-center">
-                        <span className="block text-[9px] text-slate-400 uppercase">Storage</span>
-                        <span className="font-bold text-slate-800">+{c.riskBreakdown.storageComplexityPoints}</span>
-                      </div>
-                      <div className="bg-white/80 p-1 rounded border border-slate-200 text-center">
-                        <span className="block text-[9px] text-slate-400 uppercase">Volume</span>
-                        <span className="font-bold text-slate-800">+{c.riskBreakdown.codeVolumePoints}</span>
-                      </div>
-                    </div>
-                  )}
-                  {c.riskBreakdown?.rationale && (
-                    <p className="mt-1.5 text-[10px] text-slate-500 italic line-clamp-2">
-                      {c.riskBreakdown.rationale}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-2.5 flex items-center justify-between text-[11px]">
-                <span className="text-amber-800 font-medium">Coupling: {c.coupling}</span>
-                {selected && (
-                  <span className="text-blue-700 font-bold text-[11px]">Active Scope Selected</span>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* DETAILED MODULE BREAKDOWN FOR IN-SCOPE MODULE */}
-      {selectedCapability && (
-        <section className="rounded-xl border border-slate-200 bg-slate-50/80 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3 mb-4">
+      {scopeAnalysis && (
+        <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <div>
-              <span className="text-[10px] uppercase tracking-widest text-slate-500">Detailed Module Footprint</span>
-              <h3 className="text-base font-semibold text-slate-900 mt-0.5">
-                {selectedCapability.name} — Bounded Context Specification
-              </h3>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="rounded bg-blue-100 text-blue-800 px-2.5 py-1 text-xs font-mono text-blue-700 font-semibold">
-                Wave {selectedCapability.recommendedOrder || 1}
-              </span>
-              <span className="rounded bg-slate-100 px-2.5 py-1 text-xs font-mono text-slate-700">
-                Complexity: {selectedCapability.complexity || "Medium"}
-              </span>
-            </div>
-          </div>
-
-          {/* 7Rs STRATEGY ASSESSMENT CARD (Early 2026 Architectural Decision Framework) */}
-          {selectedCapability.strategy7R && (
-            <div className="mb-5 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50/80 via-white to-blue-50/80 p-4 shadow-2xs">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-100 pb-2 mb-3">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-white text-[10px] font-bold">
-                    7R
-                  </span>
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-900">
-                    Architectural Strategy Assessment:
-                  </span>
-                  <span className="rounded bg-indigo-100 border border-indigo-300 px-2.5 py-0.5 text-xs font-bold text-indigo-800">
-                    {selectedCapability.strategy7R.strategy}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 text-[11px] font-mono">
-                  <span className="text-slate-600">
-                    Estimated Velocity: <strong className="text-slate-900">{selectedCapability.strategy7R.effortWeeks} weeks</strong>
-                  </span>
-                  <span className="text-slate-300">|</span>
-                  <span className="text-emerald-700 font-bold">
-                    ROI Impact: {selectedCapability.strategy7R.roiScore}
-                  </span>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-700 leading-relaxed mb-3">
-                <strong>Architectural Rationale:</strong> {selectedCapability.strategy7R.rationale}
+              <h3 className="text-sm font-bold text-slate-900">AST/AKG flow and module evidence</h3>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {scopeAnalysis.basis}
               </p>
-
-              {/* Dual-Cloud Target Mapping (AWS & Azure Agnostic) */}
-              <div className="grid gap-2.5 sm:grid-cols-2 text-xs">
-                <div className="rounded-lg bg-white p-2.5 border border-slate-200 shadow-2xs">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <span className="font-bold text-amber-700">AWS Target Architecture:</span>
-                  </div>
-                  <p className="font-mono text-[11px] text-slate-700 leading-snug">
-                    {selectedCapability.strategy7R.targetCloud.aws}
-                  </p>
-                </div>
-                <div className="rounded-lg bg-white p-2.5 border border-slate-200 shadow-2xs">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <span className="font-bold text-blue-700">Azure Target Architecture:</span>
-                  </div>
-                  <p className="font-mono text-[11px] text-slate-700 leading-snug">
-                    {selectedCapability.strategy7R.targetCloud.azure}
-                  </p>
-                </div>
-              </div>
             </div>
-          )}
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            {/* Constituent Programs & Roles */}
-            <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-              <h4 className="text-xs uppercase font-semibold text-slate-600 mb-3">
-                Constituent Member Programs ({selectedCapability.components?.filter((c) => c.kind === "program").length || selectedCapability.programs})
-              </h4>
-              <div className="space-y-2 max-h-56 overflow-auto">
-                {selectedCapability.components?.filter((c) => c.kind === "program").map((p) => (
-                  <div key={p.id} className="rounded bg-slate-100 p-2 text-xs border border-slate-100">
-                    <div className="flex items-center justify-between font-mono">
-                      <span className="font-bold text-blue-700 font-semibold">{p.id}</span>
-                      <span className="text-slate-500">{p.loc} LOC</span>
-                    </div>
-                    <p className="text-[11px] text-slate-700 mt-1">{p.role}</p>
-                  </div>
-                )) || (
-                  <p className="text-xs text-slate-500">Programs cataloged in AST inventory.</p>
-                )}
-              </div>
-            </div>
-
-            {/* Persistent Data Stores & Tables */}
-            <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-              <h4 className="text-xs uppercase font-semibold text-slate-600 mb-3">
-                Persistent Data Entities & Tables ({selectedCapability.components?.filter((c) => c.kind === "table").length || selectedCapability.tables})
-              </h4>
-              <div className="space-y-2 max-h-56 overflow-auto">
-                {selectedCapability.components?.filter((c) => c.kind === "table").map((t) => (
-                  <div key={t.id} className="rounded bg-slate-100 p-2 text-xs border border-slate-100">
-                    <div className="flex items-center justify-between font-mono">
-                      <span className="font-bold text-blue-700">{t.id}</span>
-                      <span className="rounded bg-blue-100 border border-blue-200 px-1.5 py-0.5 text-[10px] text-blue-700 uppercase">
-                        {t.store || "DB2"}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-700 mt-1">{t.role}</p>
-                  </div>
-                )) || (
-                  <p className="text-xs text-slate-500">Data tables linked in schema inventory.</p>
-                )}
-              </div>
+            <div className="flex flex-wrap gap-2 text-[10px] font-semibold">
+              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">{scopeAnalysis.summary.totalUseCaseFlows} candidate flows</span>
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">{scopeAnalysis.summary.mutatingFlows} mutating</span>
+              <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-800">{scopeAnalysis.summary.sharedKernelCount} shared assets</span>
             </div>
           </div>
 
-          {/* Dependencies & Integrations */}
-          {/* Unhappy Path Handling: Blast-Radius & Anti-Corruption Isolation */}
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 text-xs">
-            <div className="rounded-lg bg-slate-50 p-3 border border-slate-100">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] uppercase font-semibold text-slate-500">Module Dependencies & Blast-Radius:</span>
-                <span className="text-[9px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
-                  High Coupling Risk
-                </span>
-              </div>
-              <div className="mt-2 space-y-2">
-                {(selectedCapability.dependsOn && selectedCapability.dependsOn.length > 0) ? (
-                  selectedCapability.dependsOn.map((dep) => {
-                    const isPostponed = (e.scope as any)?.postponedDependencies?.some((p: any) => p.id === dep);
-                    return (
-                      <div key={dep} className="flex items-center justify-between rounded bg-white p-2 border border-slate-200">
-                        <div>
-                          <span className="font-mono font-bold text-slate-800">{dep}</span>
-                          <p className="text-[10px] text-slate-500">Circular shared state / cross-subsystem call</p>
-                        </div>
-                        {isPostponed ? (
-                          <span className="rounded bg-purple-100 border border-purple-200 px-2 py-0.5 text-[10px] font-bold text-purple-700">
-                            ✓ Postponed to Spike
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const updated = await api.postpone(e.id, dep, `High blast-radius dependency ${dep} decoupled from Wave 1`, "spike");
-                              onChange(updated);
-                            }}
-                            className="rounded bg-amber-50 border border-amber-300 px-2 py-0.5 text-[10px] font-bold text-amber-800 hover:bg-amber-100 transition shadow-2xs"
-                            title="Decouple this dependency from the primary modernization wave and generate an exploratory ADO Spike with an Anti-Corruption Layer"
-                          >
-                            🛡️ Postpone to Spike
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })
-                ) : (
-                  <span className="text-slate-500 italic">None — root bounded context</span>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-lg bg-slate-50 p-3 border border-slate-100">
-              <span className="text-[10px] uppercase font-semibold text-slate-500">External Integrations Touched:</span>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {(selectedCapability.integrations && selectedCapability.integrations.length > 0) ? (
-                  selectedCapability.integrations.map((intId) => (
-                    <span key={intId} className="rounded bg-purple-500/20 px-2 py-0.5 font-mono text-purple-300">
-                      {intId}
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-slate-500 italic">Internal processing only</span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* CROSS-SCOPE SHARED SERVICES & MULTI-SCOPE CONSUMERS (Scope 1 vs Scopes 2, 4, 8) */}
-          {e.scope?.sharedServices && e.scope.sharedServices.length > 0 && (
-            <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50/50 p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-blue-200 pb-2">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-white text-[10px] font-bold">
-                    ⇄
-                  </span>
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-blue-900">
-                    Cross-Scope Shared Services &amp; In-Flight Consumers ({e.scope.sharedServices.length} Shared Assets)
-                  </h4>
-                </div>
-                <span className="rounded bg-blue-100 border border-blue-300 px-2 py-0.5 text-[10px] font-bold text-blue-800">
-                  Multi-Scope Blast Radius Protected
-                </span>
-              </div>
-              <p className="text-xs text-blue-900/80">
-                The programs and tables below are part of <strong>{e.scope.name}</strong>, but are actively consumed by other application scopes (e.g. Scope 2, Scope 4). Modernizing them requires either extracting a shared domain service or applying dual-run adapters.
-              </p>
-
-              <div className="space-y-2.5">
-                {e.scope.sharedServices.map((shared) => (
-                  <div key={shared.resourceId} className="rounded-lg border border-blue-200 bg-white p-3 space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase font-bold ${
-                          shared.kind === "program" ? "bg-purple-100 text-purple-700" : "bg-emerald-100 text-emerald-700"
-                        }`}>
-                          {shared.kind}
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div>
+              <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-600">Entry points to data sinks</h4>
+              {scopeAnalysis.useCaseFlows.length > 0 ? (
+                <div className="max-h-80 space-y-2 overflow-auto">
+                  {scopeAnalysis.useCaseFlows.map((flow) => (
+                    <article key={flow.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        <h5 className="text-xs font-semibold text-slate-900">{flow.candidateUseCaseName}</h5>
+                        <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${flow.isMutation ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>
+                          {flow.isMutation ? "Mutates data" : "Read only"}
                         </span>
-                        <span className="font-mono text-xs font-bold text-slate-900">{shared.resourceId}</span>
-                        {shared.resourceName && (
-                          <span className="text-xs text-slate-600 font-medium">({shared.resourceName})</span>
-                        )}
                       </div>
-                      <span className="text-[10px] text-slate-500 font-medium">
-                        Used by {shared.consumers.length} other scopes
-                      </span>
-                    </div>
-
-                    {/* Consumer List */}
-                    <div className="rounded bg-slate-50 p-2 border border-slate-100">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
-                        Dependent Upstream &amp; Downstream Scopes:
-                      </span>
-                      <ul className="space-y-1">
-                        {shared.consumers.map((consumer, cIdx) => (
-                          <li key={cIdx} className="flex items-center gap-1.5 text-xs text-slate-700 font-medium">
-                            <span className="text-blue-500 font-bold">↳</span>
-                            <span>{consumer}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    {/* Recommended Architecture Strategy & ACL Generator */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                      {shared.recommendedStrategy && (
-                        <div className="flex items-center gap-1.5 text-[11px] text-blue-800 bg-blue-50/80 px-2.5 py-1 rounded border border-blue-200">
-                          <span className="font-bold">Architectural Strategy:</span>
-                          <span>{shared.recommendedStrategy}</span>
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const aclCode = `// ANTI-CORRUPTION LAYER (ACL) FACADE ADAPTER
-// Purpose: Protect Scope "${e.scope?.name}" while allowing cross-scope consumers (${shared.consumers.join(', ')}) to read without lock-in.
-
-@Component
-@Slf4j
-public class ${shared.resourceId}AntiCorruptionAdapter {
-
-    private final LegacyMainframeClient legacyClient;
-    private final EventBridgeClient eventBridge;
-    private final MeterRegistry metrics;
-
-    public ${shared.resourceId}AntiCorruptionAdapter(LegacyMainframeClient client, EventBridgeClient eb, MeterRegistry reg) {
-        this.legacyClient = client;
-        this.eventBridge = eb;
-        this.metrics = reg;
-    }
-
-    /**
-     * Translates modern Domain Request into Legacy CICS COMMAREA / Db2 Buffer with circuit breaker.
-     */
-    @CircuitBreaker(name = "${shared.resourceId.toLowerCase()}LegacyAcl", fallbackMethod = "fallbackToCache")
-    @Retry(name = "${shared.resourceId.toLowerCase()}Retry")
-    public DomainResponse executeProtectedCall(DomainRequest request) {
-        log.info("ACL Facade translating domain request for legacy resource: {}", "${shared.resourceId}");
-        
-        // 1. Convert EBCDIC / Packed Decimal payload into normalized JSON/POJO
-        LegacyPayload legacyPayload = LegacyMarshaller.toEbcdicBuffer(request);
-        
-        // 2. Transmit through dual-run bridge with latency monitoring
-        long start = System.currentTimeMillis();
-        LegacyResponse rawResponse = legacyClient.invokeCicsProgram("${shared.resourceId}", legacyPayload);
-        metrics.timer("acl.legacy.latency", "resource", "${shared.resourceId}").record(System.currentTimeMillis() - start, TimeUnit.MILLISECONDS);
-        
-        // 3. Return sanitized Domain Object conforming to Hexagonal DDD Boundary
-        return LegacyMarshaller.toDomainModel(rawResponse);
-    }
-
-    public DomainResponse fallbackToCache(DomainRequest req, Throwable t) {
-        log.warn("Legacy ${shared.resourceId} unresponsive. Serving from AWS ElastiCache / Redis replica.", t);
-        return CacheService.getRecentSnapshot(req.getKey());
-    }
-}`;
-                          navigator.clipboard.writeText(aclCode);
-                          alert(`Copied ${shared.resourceId} Anti-Corruption Layer (ACL) Java/Spring Adapter stub to clipboard!`);
-                        }}
-                        className="rounded bg-indigo-50 border border-indigo-200 px-2.5 py-1 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 transition shadow-2xs flex items-center gap-1"
-                        title="Generate and copy Anti-Corruption Layer (ACL) code to prevent legacy coupling"
-                      >
-                        <span>🛡️ Generate ACL Facade Stub</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        {flow.entryType} entry: <span className="font-mono">{flow.entryPoint}</span>
+                        {flow.callChain.length > 0 && <> · Calls: <span className="font-mono">{flow.callChain.join(" → ")}</span></>}
+                      </p>
+                      <p className="mt-1 text-[10px] text-slate-600">Transaction data: {flow.transactionBoundary.join(", ") || "none detected"}</p>
+                      <p className="mt-0.5 text-[10px] text-slate-500">Reads: {flow.tablesRead.join(", ") || "none"} · Writes: {flow.tablesWritten.join(", ") || "none"}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">No entry-to-data-sink flows were extracted from the available graph relationships.</p>
+              )}
             </div>
-          )}
+
+            <div>
+              <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-600">Evidence-backed scope candidates</h4>
+              {candidates.length > 0 ? (
+                <div className="max-h-80 space-y-2 overflow-auto">
+                  {candidates.map((module) => (
+                    <button
+                      key={module.moduleId}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void pick(module.moduleId)}
+                      className={`w-full rounded-lg border p-3 text-left transition disabled:cursor-wait disabled:opacity-60 ${selectedCapId === module.moduleId ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-slate-50 hover:border-slate-300"}`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        <span className="text-xs font-semibold text-slate-900">{module.moduleName}</span>
+                        <span className="font-mono text-[10px] text-slate-500">{module.moduleId}</span>
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-600">
+                        {module.programs.length} code assets · {module.tables.length} tables · {module.evidenceEdgeCount} evidence relationships
+                      </p>
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        Evidence: {module.evidenceKinds.join(", ")} · Cohesion: {module.cohesionScore} · Cross-capability: {module.crossEdges}
+                      </p>
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        Owned writes: {module.ownedTables.join(", ") || "none identified"} · Shared assets: {module.sharedKernels.join(", ") || "none identified"}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
+                  No scope candidates meet the graph-evidence requirements. Add or extract operational AST/AKG relationships; no demo scopes are substituted.
+                </p>
+              )}
+            </div>
+          </div>
         </section>
       )}
 
-
-      {/* STRANGLER-FIG WAVE PLANNER & TRAFFIC SHIFTING */}
-      {e.seed?.wave_cutover && (
-        <StranglerWavePlanner cutover={e.seed.wave_cutover} />
-      )}
-
-      {e.scope && (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 text-sm text-emerald-200">
-          ✓ Scoped Module Active: <strong>{e.scope.name}</strong> ({e.scope.metrics.programs} programs,{" "}
-          {e.scope.metrics.tables} tables). Human gate approval will freeze this boundary for requirements synthesis.
+      {e.scope && selectedCapId && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+          Selected scope: <strong>{e.scope.name}</strong> ({e.scope.metrics.programs} graph-linked code assets, {e.scope.metrics.tables} graph-linked tables).
         </div>
       )}
     </div>

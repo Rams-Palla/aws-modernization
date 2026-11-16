@@ -82,6 +82,7 @@ export function EngagementPage() {
                   {[
                     { id: "discovery", label: "Discovery", step: "01", altId: "graph" },
                     { id: "scope", label: "Scope & Boundaries", step: "02" },
+                    { id: "semantic-ir", label: "Semantic IR", step: "03" },
                   ].map((item) => {
                     const g = eng.gates[item.id] || (item.altId ? eng.gates[item.altId] : undefined);
                     const isCurrent = phase === item.id || (item.altId && phase === item.altId);
@@ -122,8 +123,8 @@ export function EngagementPage() {
                 </span>
                 <ol className="space-y-1">
                   {[
-                    { id: "requirements", label: "Requirements & Backlog", step: "03", altId: "backlog" },
-                    { id: "modernize", label: "Target Architecture", step: "04" },
+                    { id: "requirements", label: "Requirements & Backlog", step: "04", altId: "backlog" },
+                    { id: "modernize", label: "Target Architecture", step: "05" },
                   ].map((item) => {
                     const g = eng.gates[item.id] || (item.altId ? eng.gates[item.altId] : undefined);
                     const isCurrent = phase === item.id || (item.altId && phase === item.altId);
@@ -164,9 +165,9 @@ export function EngagementPage() {
                 </span>
                 <ol className="space-y-1">
                   {[
-                    { id: "tests", label: "Tests & Parity", step: "05" },
-                    { id: "failures", label: "Failure Analysis", step: "06" },
-                    { id: "artifacts", label: "Final Artifacts", step: "07" },
+                    { id: "tests", label: "Tests & Parity", step: "06" },
+                    { id: "failures", label: "Failure Analysis", step: "07" },
+                    { id: "artifacts", label: "Final Artifacts", step: "08" },
                   ].map((item) => {
                     const g = eng.gates[item.id];
                     const isCurrent = phase === item.id;

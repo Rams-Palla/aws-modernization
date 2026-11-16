@@ -392,10 +392,145 @@ export type Seed = {
     resolved: boolean;
   }[];
   coveragePct: number;
+  applied_graph?: AppliedGraph;
+  scope_analysis?: ScopeAnalysis;
   foundational_readiness?: FoundationalReadiness;
   database_invariants?: DatabaseInvariant[];
   collation_parity?: CollationParity;
   cdc_status?: CdcStatus;
+};
+
+export type ScopeAnalysis = {
+  useCaseFlows: {
+    id: string;
+    entryPoint: string;
+    entryLabel: string;
+    entryType: string;
+    callChain: string[];
+    tablesRead: string[];
+    tablesWritten: string[];
+    transactionBoundary: string[];
+    isMutation: boolean;
+    candidateUseCaseName: string;
+  }[];
+  logicalModules: {
+    moduleId: string;
+    programs: string[];
+    tables: string[];
+    ownedTables: string[];
+    intraEdges: number;
+    crossEdges: number;
+    cohesionScore: number;
+    sharedKernels: string[];
+    isHighlyCoupled: boolean;
+    recommendedBoundary: string;
+  }[];
+  businessRules: {
+    ruleId: string;
+    module: string;
+    statement: string;
+    classification: string;
+    astNode: string;
+    legacyEvidence: string;
+    snippet: string;
+    trustBoundary: string;
+    domainVocabulary: string[];
+  }[];
+  domainVocabulary: string[];
+  summary: {
+    totalUseCaseFlows: number;
+    mutatingFlows: number;
+    readOnlyFlows: number;
+    logicalModuleCount: number;
+    businessRuleCount: number;
+    sharedKernelCount: number;
+  };
+  basis: string;
+};
+
+export type AppliedGraphNode = {
+  id: string;
+  label: string;
+  type: string;
+  capability: string;
+  position: { x: number; y: number };
+  semanticRole?: string;
+  trustBoundary?: string;
+  sirRules?: string[];
+};
+
+export type AppliedGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  kind: string;
+  semanticType?: string;
+  modernEquivalent?: string;
+  migrationRisk?: string;
+};
+
+export type WorkflowChain = {
+  id: string;
+  sirRule: string;
+  sirStatement: string;
+  astNode: string;
+  legacyEvidence: string;
+  requirement: string;
+  requirementStatement: string;
+  backlogItem: string;
+  backlogTitle: string;
+  wave: number;
+  testCases: string[];
+  trustBoundary: string;
+  traceComplete: boolean;
+};
+
+export type SharedKernel = {
+  id: string;
+  nodeId: string;
+  nodeType: string;
+  consumingCapabilities: string[];
+  couplingDegree: number;
+  recommendation: string;
+  migrationRisk: string;
+};
+
+export type AppliedGraph = {
+  nodes: AppliedGraphNode[];
+  edges: AppliedGraphEdge[];
+  dataLineage: {
+    id: string;
+    source: string;
+    target: string;
+    kind: string;
+    sourceField: string;
+    targetColumn: string;
+    sourceType: string;
+    targetType: string;
+    conversionNote: string;
+    migrationRisk: string;
+  }[];
+  workflowChains: WorkflowChain[];
+  sharedKernels: SharedKernel[];
+  statistics: {
+    totalNodes: number;
+    capabilityNodes: number;
+    programNodes: number;
+    tableNodes: number;
+    eventNodes: number;
+    totalEdges: number;
+    edgesByKind: Record<string, number>;
+    dataLineageFields: number;
+    totalWorkflowChains: number;
+    tracedWorkflowChains: number;
+    sharedKernelCount: number;
+  };
+  semanticIndex: {
+    nodesByRole: Record<string, string[]>;
+    nodesByTrustBoundary: Record<string, string[]>;
+    edgesBySemanticType: Record<string, string[]>;
+  };
+  basis: string;
 };
 
 export type PhaseMeta = { id: string; label: string; group: string };
@@ -451,6 +586,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ capabilityId }),
     }).then((r) => parse<Engagement>(r)),
+  scopeAnalysis: (id: string) =>
+    fetch(`/api/engagements/${id}/scope-analysis`).then((r) => parse<ScopeAnalysis>(r)),
   postpone: (id: string, dependencyId: string, reason?: string, strategy?: "spike" | "acl") =>
     fetch(`/api/engagements/${id}/scope/postpone`, {
       method: "POST",
@@ -692,6 +829,8 @@ export const api = {
         discovery: any;
       }>(r),
     ),
+  knowledgeGraph: (id: string) =>
+    fetch(`/api/engagements/${id}/knowledge-graph`).then((r) => parse<AppliedGraph>(r)),
   packUrl: (id: string) => `/api/engagements/${id}/pack`,
 };
 

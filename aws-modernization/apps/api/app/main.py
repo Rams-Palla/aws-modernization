@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -11,8 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from . import ado, aws_intake, bedrock_skills, ingest, pack, playwright_gen, store
+from . import ado, aws_intake, bedrock_skills, ingest, knowledge_graph, pack, playwright_gen, store
 from .phases import PHASE_IDS, PHASES
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -172,15 +175,18 @@ def set_scope(eid: str, body: ScopeIn):
     eng = store.load(eid)
     if not eng:
         raise HTTPException(404, "Engagement not found")
-    caps = {c["id"]: c for c in (eng.get("seed") or {}).get("capabilities", [])}
+    seed = eng.setdefault("seed", {})
+    if "scope_analysis" not in seed:
+        seed["applied_graph"] = seed.get("applied_graph") or knowledge_graph.build_applied_graph(seed)
+        seed["scope_analysis"] = knowledge_graph.identify_scope(seed)
+    caps = {c["id"]: c for c in seed.get("capabilities", [])}
     cap = caps.get(body.capabilityId)
     if not cap:
         raise HTTPException(400, "Unknown capability")
-    programs = [p for p in eng["seed"]["programs"] if p["capability"] == body.capabilityId]
-    tables = [t for t in eng["seed"]["tables"] if t["capability"] == body.capabilityId]
+    programs = [p for p in seed["programs"] if p["capability"] == body.capabilityId]
+    tables = [t for t in seed["tables"] if t["capability"] == body.capabilityId]
     # Cross-Scope Shared Services Analysis:
     # Identify which programs and tables inside this scope are called/read/written by OTHER capabilities (Scope 2, Scope 3, etc.)
-    seed = eng.get("seed") or {}
     edges = (seed.get("graph") or {}).get("edges", [])
     all_programs = {p["id"]: p for p in seed.get("programs", [])}
     all_tables = {t["id"]: t for t in seed.get("tables", [])}
@@ -273,7 +279,7 @@ def set_scope(eid: str, body: ScopeIn):
             pw_dir = store.engagement_dir(eid) / "artifacts" / "tests" / "playwright"
             playwright_gen.generate_playwright_suite(pw_dir, eng)
         except Exception:
-            pass
+            logger.exception("Could not build applied knowledge graph and scope analysis")
 
     return store.save(eng)
 
@@ -437,6 +443,8 @@ def decide_gate(eid: str, phase: str, body: GateIn):
             pass
         elif phase == "scope" and eng["gates"].get("discovery", {}).get("decision") == "approved":
             pass
+        elif phase == "semantic-ir" and eng["gates"].get("scope", {}).get("decision") == "approved":
+            pass
         elif phase == "modernize" and eng["gates"].get("requirements", {}).get("decision") == "approved":
             pass
         elif eng["gates"][prev].get("decision") != "approved":
@@ -468,6 +476,19 @@ def decide_gate(eid: str, phase: str, body: GateIn):
             eng["gates"]["graph"]["comment"] = body.comment
             eng["gates"]["graph"]["actor"] = body.actor
             eng["gates"]["graph"]["at"] = eng["gates"][phase]["at"]
+            # Auto-build applied knowledge graph on discovery approval
+            try:
+                seed = eng.setdefault("seed", {})
+                seed["applied_graph"] = knowledge_graph.build_applied_graph(seed)
+                seed["scope_analysis"] = knowledge_graph.identify_scope(seed)
+            except Exception:
+                pass
+        elif phase == "scope" and "semantic-ir" in eng["gates"]:
+            eng["gates"]["semantic-ir"]["decision"] = "approved"
+            eng["gates"]["semantic-ir"]["status"] = "approved"
+            eng["gates"]["semantic-ir"]["comment"] = body.comment
+            eng["gates"]["semantic-ir"]["actor"] = body.actor
+            eng["gates"]["semantic-ir"]["at"] = eng["gates"][phase]["at"]
         elif phase == "requirements" and "backlog" in eng["gates"]:
             eng["gates"]["backlog"]["decision"] = "approved"
             eng["gates"]["backlog"]["status"] = "approved"
@@ -482,6 +503,10 @@ def decide_gate(eid: str, phase: str, body: GateIn):
             nxt = "scope"
         elif phase == "graph":
             nxt = "scope"
+        elif phase == "scope":
+            nxt = "semantic-ir"
+        elif phase == "semantic-ir":
+            nxt = "requirements"
         elif phase == "requirements":
             nxt = "modernize"
         elif phase == "backlog":
@@ -911,6 +936,35 @@ def post_batch_modernize(eid: str, body: BatchIn | None = None):
     eng.setdefault("seed", {})["batch_modernization"] = res
     store.save(eng)
     return res
+
+
+@app.get("/api/engagements/{eid}/knowledge-graph")
+def get_knowledge_graph(eid: str):
+    eng = store.load(eid)
+    if not eng:
+        raise HTTPException(404, "Engagement not found")
+    seed = eng.get("seed") or {}
+    applied = knowledge_graph.build_applied_graph(seed)
+    seed["applied_graph"] = applied
+    seed["scope_analysis"] = knowledge_graph.identify_scope(seed)
+    eng["seed"] = seed
+    store.save(eng)
+    return applied
+
+
+@app.get("/api/engagements/{eid}/scope-analysis")
+def get_scope_analysis(eid: str):
+    eng = store.load(eid)
+    if not eng:
+        raise HTTPException(404, "Engagement not found")
+    seed = eng.setdefault("seed", {})
+    if not seed.get("applied_graph"):
+        seed["applied_graph"] = knowledge_graph.build_applied_graph(seed)
+    analysis = knowledge_graph.identify_scope(seed)
+    seed["scope_analysis"] = analysis
+    eng["seed"] = seed
+    store.save(eng)
+    return analysis
 
 
 @app.get("/api/engagements/{eid}/saga-orchestrator")
