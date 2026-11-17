@@ -664,6 +664,24 @@ def build_modernization_context(scope: dict, target_tech: dict, *, source_contex
         "selectedTables": [t.get("name") or t.get("id") for t in selected_tables],
         "selectedFiles": [f.get("path") or f.get("file") for f in selected_files if isinstance(f, dict)],
         "externalDependencies": external_dependencies,
+        "crossModuleDependencies": [
+            {
+                "component": item.get("component") or item.get("dependency") or "cross-module-boundary",
+                "dependency": item.get("dependency") or item.get("component") or "shared-service",
+                "impact": item.get("impact") or "Cross-module dependency could drive duplicate logic and higher tech debt.",
+                "requiredHumanAction": item.get("requiredHumanAction") or "Decide whether to isolate this dependency behind a shared service or anti-corruption facade.",
+            }
+            for item in list(scope.get("crossModuleDependencies", []))
+        ],
+        "duplicatePatterns": [
+            {
+                "component": item.get("component") or "shared-logic",
+                "issue": item.get("issue") or "Duplicate logic detected across modules.",
+                "impact": item.get("impact") or "Duplicate code raises regression risk and increases technical debt.",
+                "action": item.get("action") or "Centralize the logic in a reusable domain service or shared library.",
+            }
+            for item in list(scope.get("duplicatePatterns", []))
+        ],
         "targetArchitecture": {
             "language": (target_tech or {}).get("language"),
             "framework": (target_tech or {}).get("framework"),
@@ -674,29 +692,96 @@ def build_modernization_context(scope: dict, target_tech: dict, *, source_contex
 
 
 def generate_human_action_document(scope: dict, issues: list[dict] | None = None) -> dict:
-    """Generate a human action / TODO artifact for unresolved dependencies and modernization gaps."""
-    actions = list(issues or [])
+    """Generate a human action / TODO artifact for external dependencies, duplication, and reusable-code remediation."""
+    def add_action(actions: list[dict], component: str, issue: str, impact: str, required_human_action: str, priority: str = "MEDIUM", resolution_status: str = "OPEN") -> None:
+        actions.append({
+            "component": component,
+            "issue": issue,
+            "impact": impact,
+            "requiredHumanAction": required_human_action,
+            "priority": priority,
+            "resolutionStatus": resolution_status,
+        })
+
+    actions: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def append_unique(component: str, issue: str, impact: str, required_human_action: str, priority: str = "MEDIUM", resolution_status: str = "OPEN") -> None:
+        key = (str(component), str(issue))
+        if key in seen:
+            return
+        seen.add(key)
+        add_action(actions, component, issue, impact, required_human_action, priority=priority, resolution_status=resolution_status)
+
+    # Pass through explicit issues and remediation tasks from callers.
+    for issue in list(issues or []):
+        component = issue.get("component") or scope.get("name") or "selected-scope"
+        issue_text = issue.get("issue") or "Unspecified modernization risk"
+        impact_text = issue.get("impact") or "Could affect correctness, reusability, or operating stability."
+        required_text = issue.get("requiredHumanAction") or "Validate and resolve"
+        priority = issue.get("priority") or "MEDIUM"
+        resolution_status = issue.get("resolutionStatus") or "OPEN"
+        append_unique(component, issue_text, impact_text, required_text, priority=priority, resolution_status=resolution_status)
+
+    # Surface third-party or cross-module dependency risks from the selected scope.
+    for svc in list(scope.get("sharedServices", [])):
+        resource_name = svc.get("resourceName") or svc.get("resourceId") or "shared-resource"
+        consumers = svc.get("consumers") or []
+        if consumers:
+            append_unique(
+                resource_name,
+                f"Third-party or external dependency on {resource_name} crosses scope boundaries.",
+                "This dependency can lead to hidden coupling, duplicate logic, and higher tech debt if not isolated with a shared contract or anti-corruption layer.",
+                f"Confirm the contract for {resource_name}, isolate it behind a reusable API facade, and ensure consumers use a single integration pattern.",
+                priority="HIGH",
+            )
+
+    for dep in list(scope.get("crossModuleDependencies", [])):
+        component = dep.get("component") or dep.get("dependency") or "cross-module-boundary"
+        issue_text = dep.get("dependency") or f"Cross-module dependency for {component} is unresolved."
+        impact_text = dep.get("impact") or "Cross-module coupling increases duplication risk and tech debt across the solution."
+        required_text = dep.get("requiredHumanAction") or "Define a shared service contract and remove duplicate business logic to improve reuse."
+        append_unique(component, f"External or cross-module dependency: {issue_text}", impact_text, required_text, priority="HIGH")
+
+    for pattern in list(scope.get("duplicatePatterns", [])):
+        component = pattern.get("component") or "shared-logic"
+        issue_text = pattern.get("issue") or f"Duplicate logic detected in {component}."
+        impact_text = pattern.get("impact") or "Duplicate business logic creates drift, regeneration risk, and additional technical debt."
+        required_text = pattern.get("action") or "Centralize this logic in a reusable domain service or shared utility to reduce duplication."
+        append_unique(component, issue_text, impact_text, required_text, priority="HIGH")
+
+    # Include postponed dependency backlog items as human review actions if they were captured in scope.
+    for postponed in list(scope.get("postponedDependencies", [])):
+        dependency_id = postponed.get("id") or postponed.get("dependencyId") or "postponed-dependency"
+        reason = postponed.get("reason") or "Deferred dependency requires a later rework decision."
+        append_unique(
+            dependency_id,
+            f"Deferred dependency {dependency_id} requires human follow-through.",
+            f"This dependency was postponed to reduce initial blast radius, but it still carries tech debt and rework risk: {reason}",
+            "Decide whether to isolate the dependency behind a shared interface, event-driven adapter, or reusable domain abstraction before release.",
+            priority="MEDIUM",
+        )
+
     if not actions:
-        actions = [
-            {
-                "component": scope.get("name") or "selected-scope",
-                "issue": "No unresolved gap was identified in the selected scope.",
-                "impact": "No blocked work remains for this modernization scope.",
-                "requiredHumanAction": "Review the generated output and approve deployment.",
-                "priority": "LOW",
-                "resolutionStatus": "NOT_REQUIRED",
-            }
-        ]
+        append_unique(
+            scope.get("name") or "selected-scope",
+            "No unresolved gap was identified in the selected scope.",
+            "No blocked work remains for this modernization scope.",
+            "Review the generated output and approve deployment.",
+            priority="LOW",
+            resolution_status="NOT_REQUIRED",
+        )
+
     normalized = []
-    for idx, issue in enumerate(actions, start=1):
+    for idx, action in enumerate(actions, start=1):
         normalized.append({
             "id": f"TODO-{idx:03d}",
-            "component": issue.get("component") or scope.get("name") or "selected-scope",
-            "issue": issue.get("issue") or "Unspecified modernization risk",
-            "impact": issue.get("impact") or "Could affect correctness or adoption",
-            "requiredHumanAction": issue.get("requiredHumanAction") or "Validate and resolve",
-            "priority": issue.get("priority") or "MEDIUM",
-            "resolutionStatus": issue.get("resolutionStatus") or "OPEN",
+            "component": action.get("component") or scope.get("name") or "selected-scope",
+            "issue": action.get("issue") or "Unspecified modernization risk",
+            "impact": action.get("impact") or "Could affect correctness, reuse, or operational stability.",
+            "requiredHumanAction": action.get("requiredHumanAction") or "Validate and resolve",
+            "priority": action.get("priority") or "MEDIUM",
+            "resolutionStatus": action.get("resolutionStatus") or "OPEN",
         })
     return {"scope": scope.get("name") or "selected-scope", "status": "DOCUMENTED", "totalOpenActions": len(normalized), "actions": normalized}
 
