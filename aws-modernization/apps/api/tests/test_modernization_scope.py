@@ -124,6 +124,29 @@ def test_synthesize_target_codebase_converts_each_selected_legacy_file():
     assert all("modernized" in path.lower() or "converted" in path.lower() for path in generated_paths)
 
 
+def test_synthesize_target_codebase_uses_selected_scope_identity_for_each_module():
+    scope_a = {
+        "name": "Claims Processing",
+        "capabilityId": "claims",
+        "programs": [{"id": "CLM001", "name": "Policy Renewal", "path": "src/legacy/policy_renewal.cbl"}],
+    }
+    scope_b = {
+        "name": "Billing Processing",
+        "capabilityId": "billing",
+        "programs": [{"id": "BILL001", "name": "Premium Calculation", "path": "src/legacy/premium_calc.rpgle"}],
+    }
+    target = {"language": "python", "framework": "fastapi", "approved": True}
+
+    result_a = synthesize_target_codebase(scope_a, target)
+    result_b = synthesize_target_codebase(scope_b, target)
+
+    assert result_a != result_b
+    assert any("policy_renewal" in path.lower() for path in result_a)
+    assert any("premium_calc" in path.lower() for path in result_b)
+    assert "claims" in next(iter(result_a.values())).lower() or "policy_renewal" in next(iter(result_a.values())).lower()
+    assert "billing" in next(iter(result_b.values())).lower() or "premium_calc" in next(iter(result_b.values())).lower()
+
+
 def test_generate_human_action_document_includes_todo_fields():
     todo = generate_human_action_document({
         "name": "Claims Processing",

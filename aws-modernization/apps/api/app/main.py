@@ -245,11 +245,21 @@ def set_scope(eid: str, body: ScopeIn):
             }
         ]
 
+    scope_files = []
+    for item in programs:
+        path = item.get("path")
+        if path:
+            scope_files.append({
+                "path": str(path),
+                "file": os.path.basename(str(path)),
+                "content": item.get("content") or item.get("source") or "",
+            })
     eng["scope"] = {
         "capabilityId": body.capabilityId,
         "name": cap["name"],
         "programs": programs,
         "tables": tables,
+        "files": scope_files,
         "sharedServices": shared_services,
         "extraPaths": body.extraPaths,
         "metrics": {

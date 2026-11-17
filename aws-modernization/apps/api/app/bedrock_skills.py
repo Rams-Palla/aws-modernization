@@ -1076,23 +1076,39 @@ def synthesize_target_codebase(scope: dict, target_tech: dict) -> dict[str, str]
             "}\n"
         )
 
-    selected_files: list[str] = []
+    selected_files: list[dict[str, str]] = []
     for raw_entry in list(scope.get("files", [])):
         if isinstance(raw_entry, dict):
             candidate = raw_entry.get("path") or raw_entry.get("file")
             if candidate:
-                selected_files.append(str(candidate))
+                selected_files.append({
+                    "path": str(candidate),
+                    "file": str(raw_entry.get("file") or os.path.basename(str(candidate))),
+                    "content": str(raw_entry.get("content") or raw_entry.get("code") or raw_entry.get("source") or ""),
+                })
+
+    if not selected_files:
+        for group_name in ("programs", "tables"):
+            for item in list(scope.get(group_name, [])):
+                if not isinstance(item, dict):
+                    continue
+                candidate = item.get("path") or item.get("file") or item.get("name")
+                if not candidate:
+                    continue
+                selected_files.append({
+                    "path": str(candidate),
+                    "file": str(item.get("file") or os.path.basename(str(candidate))),
+                    "content": str(item.get("content") or item.get("source") or ""),
+                })
 
     if selected_files:
         converted: dict[str, str] = {}
-        for raw_entry in list(scope.get("files", [])):
-            if not isinstance(raw_entry, dict):
-                continue
+        for raw_entry in selected_files:
             source_path = str(raw_entry.get("path") or raw_entry.get("file") or "")
             if not source_path:
                 continue
             source_name = os.path.basename(source_path)
-            source_text = raw_entry.get("content") or raw_entry.get("code") or raw_entry.get("source") or ""
+            source_text = str(raw_entry.get("content") or raw_entry.get("code") or raw_entry.get("source") or "")
             base_name = os.path.splitext(source_name)[0]
             target_stem = safe_name(base_name)
             if "csharp" in lang or "dotnet" in lang or ".net" in lang or "aspnet" in framework:
